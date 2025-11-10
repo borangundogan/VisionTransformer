@@ -4,4 +4,13 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "einops>=0.8.1",
+    "matplotlib>=3.10.7",
+    "numpy>=2.3.4",
+    "timm>=1.0.22",
+    "torch>=2.9.0",
+    "torchaudio>=2.9.0",
+    "torchvision>=0.24.0",
+    "tqdm>=4.67.1",
+]
