@@ -5,6 +5,7 @@ from torch import nn
 from torchvision import datasets, transforms, models
 from torch.utils.data import DataLoader, random_split
 from torch import optim
+import matplotlib.pyplot as plt
 
 from base import ViT, CrossViT 
 
@@ -23,8 +24,10 @@ def parse_args():
     parser.add_argument('--dry-run', action='store_true', default=False, help='quickly check a single pass')
     return parser.parse_args()
 
-def train(model, trainloader, optimizer, criterion, device, epoch):
+
+def train(model, trainloader, optimizer, criterion, device, epoch, args):
     model.train()
+    batch_losses = []
     for batch_idx, (data, target) in enumerate(trainloader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
@@ -32,12 +35,21 @@ def train(model, trainloader, optimizer, criterion, device, epoch):
         loss = criterion(output, target)/len(output)
         loss.backward()
         optimizer.step()
+
+        batch_losses.append(loss.item())
+
         if batch_idx % args.log_interval == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(trainloader.dataset),
-                       100. * batch_idx / len(trainloader), loss.item()))
+                epoch,
+                batch_idx * len(data),
+                len(trainloader.dataset),
+                100. * batch_idx / len(trainloader),
+                loss.item()))
             if args.dry_run:
                 break
+
+    return sum(batch_losses) / len(batch_losses)
+
 
 def test(model, device, test_loader, criterion, set="Test"):
     model.eval()
@@ -55,8 +67,10 @@ def test(model, device, test_loader, criterion, set="Test"):
     accuracy = 100. * correct / len(test_loader.dataset)
     print('\n{} set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
         set, test_loss, correct, len(test_loader.dataset),
-        100. * correct / len(test_loader.dataset)))
+        accuracy))
+
     return accuracy
+
 
 def run(args):
     # Data Augmentation
@@ -86,9 +100,9 @@ def run(args):
     testset = datasets.CIFAR10(root=data_dir, train=False, download=True, transform=test_transform)
 
     # Dataloaders 
-    trainloader = DataLoader(trainset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
-    valloader = DataLoader(valset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
-    testloader = DataLoader(testset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
+    trainloader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=2, pin_memory=True)
+    valloader = DataLoader(valset, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
+    testloader = DataLoader(testset, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
 
     # feed-forward network
     print(f"Using {args.model}")
@@ -116,15 +130,22 @@ def run(args):
         device = torch.device("cuda")
     else:
         device = torch.device("cpu")
+    print(device)
     model.to(device)
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
 
+    train_losses = []
+    val_accuracies = []
+
     best_val_acc = 0.0
     for epoch in range(1, args.epochs + 1):
-        train(model, trainloader, optimizer, criterion, device, epoch)
+        train_loss = train(model, trainloader, optimizer, criterion, device, epoch, args)
         val_acc = test(model, device, valloader, criterion, set="Validation")
 
-        # save the best model 
+        train_losses.append(train_loss)
+        val_accuracies.append(val_acc)
+
+        # save the best model 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             torch.save(model.state_dict(), "best_model.pt")
@@ -133,6 +154,16 @@ def run(args):
     print("evaluating best model on test set...")
     model.load_state_dict(torch.load("best_model.pt"))
     test(model, device, testloader, criterion, set="Test")
+
+    # Plot
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_losses, label="Train Loss")
+    plt.plot(val_accuracies, label="Validation Accuracy")
+    plt.xlabel("Epoch")
+    plt.legend()
+    plt.title("Training Loss and Validation Accuracy")
+    plt.show()
+
 
 if __name__ == '__main__':
     args = parse_args()
