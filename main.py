@@ -58,14 +58,13 @@ def test(model, device, test_loader, criterion, set="Test"):
         100. * correct / len(test_loader.dataset)))
     return accuracy
 
-
 def run(args):
     # Data Augmentation
     train_transform = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        # CIFAR-10-specific normalization (not ImageNet)
+        # CIFAR-10 normalization
         transforms.Normalize(mean=(0.4914, 0.4822, 0.4465),
                              std=(0.2470, 0.2435, 0.2616))
     ])
@@ -77,7 +76,7 @@ def run(args):
                              std=(0.2470, 0.2435, 0.2616))
     ])
 
-    # --- Datasets ---
+    # Datasets 
     data_dir = "./data"  # better to keep relative path
     full_train = datasets.CIFAR10(root=data_dir, train=True, download=True, transform=train_transform)
     train_size = int(0.9 * len(full_train))
@@ -86,12 +85,12 @@ def run(args):
 
     testset = datasets.CIFAR10(root=data_dir, train=False, download=True, transform=test_transform)
 
-    # --- Dataloaders ---
+    # Dataloaders 
     trainloader = DataLoader(trainset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
     valloader = DataLoader(valset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
     testloader = DataLoader(testset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
 
-    # Build a feed-forward network
+    # feed-forward network
     print(f"Using {args.model}")
     if args.model == "r18":
         model = models.resnet18(pretrained=False)
@@ -110,8 +109,9 @@ def run(args):
                          cross_attn_dim_head = 64, depth = 3, dropout = 0.1,
                          emb_dropout = 0.1)
 
-    # Define the loss
-    criterion = nn.CrossEntropyLoss() # using sum makes loss scale with BC size and Dataset size, which breaks comparability across epochs. use default which is mean.
+    # loss
+    # maybe can be using sum makes loss scale with BC size and Dataset size, which breaks comparability across epochs. use default which is mean.
+    criterion = nn.CrossEntropyLoss(reduction="sum")
     if torch.cuda.is_available():
         device = torch.device("cuda")
     else:

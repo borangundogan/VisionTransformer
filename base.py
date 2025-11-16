@@ -43,10 +43,10 @@ class Attention(nn.Module):
         super().__init__()
         # set heads and scale (=sqrt(dim_head))
         # TODO
-        self.heads = heads
-        self.scale = dim_head ** -0.5 # 1 / sqrt(dim_head)
-        self.dim_head = dim_head
-        inner_dim = dim_head * heads
+        self.heads = heads # 8 multi head
+        self.scale = dim_head ** -0.5 # 1 / sqrt(dim_head) from Scaled dot-product attention formula
+        self.dim_head = dim_head # 64 dim
+        inner_dim = dim_head * heads # 64 * 8 -> 512
         # we need softmax layer and dropout
         # TODO
         self.softmax = nn.Softmax(dim=-1)
@@ -61,7 +61,7 @@ class Attention(nn.Module):
         # and the output linear layer followed by dropout
         # TODO
         self.out = nn.Sequential(
-            nn.Linear(inner_dim, dim),
+            nn.Linear(inner_dim, dim), # 512 -> 64 
             nn.Dropout(dropout)
         )
 
@@ -71,7 +71,7 @@ class Attention(nn.Module):
         # don't forget the dropout after the attention 
         # and before the multiplication w. 'v'
         # the output should be in the shape 'b n (h d)'
-        b, n, _, h = *x.shape, self.heads
+        b, n, _, h = *x.shape, self.heads # x -> (B, N, dim) Batch size, tokens ,dim: 64
         if context is None:
             context = x
 
@@ -80,17 +80,17 @@ class Attention(nn.Module):
             context = torch.cat((x, context), dim = 1) 
         
         # TODO: attention 
-        q = self.q(x)
-        k, v = self.kv(context).chunk(2, dim=-1)
-        
-        q = rearrange(q, 'b n (h d) -> b h n d', h=h)
-        k = rearrange(k, 'b n (h d) -> b h n d', h=h)
-        v = rearrange(v, 'b n (h d) -> b h n d', h=h)
+        q = self.q(x) # (B, N, heads*dim_head)
+        k, v = self.kv(context).chunk(2, dim=-1) # (B, N_ctx, heads*dim_head) , (B, N_ctx, heads*dim_head)
+        # (B, N, heads*dim_head)
+        q = rearrange(q, 'b n (h d) -> b h n d', h=h) # (B, heads, N, dim_head)
+        k = rearrange(k, 'b n (h d) -> b h n d', h=h) # (B, heads, N, dim_head)
+        v = rearrange(v, 'b n (h d) -> b h n d', h=h) # (B, heads, N, dim_head)
         
         # scaled dot-product attention
         attn_scores = torch.matmul(q, k.transpose(-1, -2)) * self.scale
         attn = self.softmax(attn_scores)
-        attn = self.attn_dropout(attn)
+        attn = self.attn_dropout(attn) # to prevent overfitting ! 
 
         # weighted sum of values
         out = torch.matmul(attn, v)  # [B, heads, N, dim_head]
@@ -148,9 +148,9 @@ class ProjectInOut(nn.Module):
             - fn(W_in) * W_out
         """
         # TODO
-        x_proj = self.project_in(x)                 # -> [B, N, dim_inner]
-        y = self.fn(x_proj, *args, **kwargs)        # -> [B, N, dim_inner]
-        return self.project_out(y)                  # -> [B, N, dim_outer]
+        x_proj = self.project_in(x)                 # -> [B, N, dim_inner] (B, 1, 64) -> Linear(64 → 128) -> (B, 1, 128)
+        y = self.fn(x_proj, *args, **kwargs)        # -> [B, N, dim_inner] 
+        return self.project_out(y)                  # -> [B, N, dim_outer] (B, 1, 128) -> Linear(128 → 64) -> (B, 1, 64)
 
 # CrossViT
 # cross attention transformer
@@ -221,7 +221,7 @@ class MultiScaleEncoder(nn.Module):
         self.layers = nn.ModuleList([])
         for _ in range(depth):
             sm_encoder = Transformer(
-                dim = sm_dim,
+                dim = sm_dim, # 64, patchsize = 8 -> 32 / 8 = 4 ** 2 = 16
                 depth = sm_enc_params['depth'],
                 heads = sm_enc_params['heads'],
                 dim_head = sm_enc_params['dim_head'],
@@ -229,7 +229,7 @@ class MultiScaleEncoder(nn.Module):
                 dropout = dropout
             )
             lg_encoder = Transformer(
-                dim = lg_dim,
+                dim = lg_dim, # 128, patchsize = 16 -> 32 / 16 = 2 ** 2 = 4
                 depth = lg_enc_params['depth'],
                 heads = lg_enc_params['heads'],
                 dim_head = lg_enc_params['dim_head'],
@@ -266,29 +266,30 @@ class ImageEmbedder(nn.Module):
         self,
         *,
         dim,
-        image_size,
-        patch_size,
+        image_size, # 32 x 32
+        patch_size, # 8 sm / 16 lg
         dropout = 0.
     ):
         super().__init__()
         assert image_size % patch_size == 0, 'Image dimensions must be divisible by the patch size.'
-        num_patches = (image_size // patch_size) ** 2
+        num_patches = (image_size // patch_size) ** 2 # (b, patchesnum, dim)
         patch_dim = 3 * patch_size ** 2
 
         # create layer that re-arranges the image patches
         # and embeds them with layer norm + linear projection + layer norm
         # TODO 
         self.to_patch_embedding = nn.Sequential(
-            Rearrange('b c (h p) (w q) -> b (h w) (p q c)', p = patch_size, q = patch_size),
+            # (B, C=3, H=32, W=32) input -> (B, num_patches (4x4=16), patch_dim_flattened = 8*8*3 == 192)
+            Rearrange('b c (h p) (w q) -> b (h w) (p q c)', p = patch_size, q = patch_size), # (batchsize, channel, height, width) 
             nn.LayerNorm(patch_dim),
             nn.Linear(patch_dim, dim),
             nn.LayerNorm(dim),
         )
         # create/initialize #dim-dimensional positional embedding (will be learned)
         # TODO
-        self.pos_embedding = nn.Parameter(torch.randn(1, num_patches + 1, dim))        
+        self.pos_embedding = nn.Parameter(torch.randn(1, num_patches + 1, dim))  # CLS + num_patches = tokens that transformer read them !       
         # create #dim cls tokens (for each patch embedding)
-        self.cls_token    = nn.Parameter(torch.randn(1, 1, dim))
+        self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
         # TODO
         # create dropput layer
         self.dropout = nn.Dropout(dropout)
@@ -374,24 +375,24 @@ class CrossViT(nn.Module):
     def __init__(
         self,
         *,
-        image_size,
-        num_classes,
-        sm_dim,
-        lg_dim,
-        sm_patch_size = 12,
-        sm_enc_depth = 1,
+        image_size, # for CIFAR 32
+        num_classes, # 10
+        sm_dim, # assume 64 
+        lg_dim, # assume 128 
+        sm_patch_size = 12, # -> more detail 
+        sm_enc_depth = 1, # transformer depth for sm
         sm_enc_heads = 8,
         sm_enc_mlp_dim = 2048,
         sm_enc_dim_head = 64,
-        lg_patch_size = 16,
-        lg_enc_depth = 4,
+        lg_patch_size = 16, # -> more global context
+        lg_enc_depth = 4, # transformer depth for lg
         lg_enc_heads = 8,
         lg_enc_mlp_dim = 2048,
         lg_enc_dim_head = 64,
-        cross_attn_depth = 2,
+        cross_attn_depth = 2, # how many cross attention block we have !
         cross_attn_heads = 8,
         cross_attn_dim_head = 64,
-        depth = 3,
+        depth = 3, # how many we have "(sm_encoder, lg_encoder, cross_block)" in MultiScaleEncoder
         dropout = 0.1,
         emb_dropout = 0.1
     ):
